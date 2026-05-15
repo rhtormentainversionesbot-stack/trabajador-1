@@ -1,6 +1,6 @@
 """
 TRABAJADOR 1 — Backend Flask
-Sistema de generación automática de vídeos para YouTube
+Sin moviepy, usa ffmpeg directamente para compatibilidad con Python 3.14
 """
 
 from flask import Flask, request, jsonify, send_file
@@ -13,10 +13,7 @@ import os
 import json
 import uuid
 import threading
-from moviepy.editor import (
-    ImageClip, AudioFileClip, CompositeVideoClip,
-    TextClip, concatenate_videoclips
-)
+import subprocess
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -25,9 +22,6 @@ from google.oauth2.credentials import Credentials
 app = Flask(__name__)
 CORS(app)
 
-# ============================================================
-# CLAVES — ponlas en variables de entorno en Render
-# ============================================================
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 PEXELS_API_KEY     = os.environ.get("PEXELS_API_KEY", "")
@@ -38,11 +32,8 @@ gemini = genai.GenerativeModel("gemini-2.0-flash")
 eleven = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-JOBS = {}  # almacén de trabajos en memoria
+JOBS = {}
 
-# ============================================================
-# UTILIDADES
-# ============================================================
 def generar_guion(tema, instrucciones_extra=""):
     prompt = (
         "Eres un analista financiero experto para el canal YouTube Inversion Rapida. "
@@ -101,37 +92,34 @@ def generar_voz(texto, job_id):
     save(audio, ruta)
     return ruta
 
-def montar_video(imagenes, audio_path, guion, job_id):
+def montar_video_ffmpeg(imagenes, audio_path, job_id):
     salida = "/tmp/" + job_id + "/video_final.mp4"
-    audio = AudioFileClip(audio_path)
-    duracion_total = audio.duration
+    lista_path = "/tmp/" + job_id + "/lista.txt"
+
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
+        capture_output=True, text=True
+    )
+    duracion_total = float(result.stdout.strip())
     duracion_img = duracion_total / len(imagenes)
 
-    clips = []
-    for ruta in imagenes:
-        clip = ImageClip(ruta).set_duration(duracion_img).resize(height=1080)
-        clips.append(clip)
+    with open(lista_path, "w") as f:
+        for img in imagenes:
+            f.write("file '" + img + "'\n")
+            f.write("duration " + str(round(duracion_img, 2)) + "\n")
+        f.write("file '" + imagenes[-1] + "'\n")
 
-    video = concatenate_videoclips(clips, method="compose")
-    video = video.set_audio(audio)
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", lista_path,
+        "-i", audio_path,
+        "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
+        "-c:v", "libx264", "-c:a", "aac",
+        "-shortest", "-pix_fmt", "yuv420p",
+        salida
+    ], check=True)
 
-    palabras = guion.split()
-    bloques = [" ".join(palabras[i:i+6]) for i in range(0, len(palabras), 6)]
-    dur_bloque = duracion_total / max(len(bloques), 1)
-
-    subtitulos = []
-    for i, bloque in enumerate(bloques):
-        txt = (TextClip(bloque, fontsize=52, color="white", font="Arial-Bold",
-                        stroke_color="black", stroke_width=2,
-                        method="caption", size=(1700, None))
-               .set_start(i * dur_bloque)
-               .set_duration(dur_bloque)
-               .set_position(("center", 0.82), relative=True))
-        subtitulos.append(txt)
-
-    final = CompositeVideoClip([video] + subtitulos)
-    final.write_videofile(salida, fps=30, codec="libx264",
-                          audio_codec="aac", verbose=False, logger=None)
     return salida
 
 def subir_youtube(video_path, titulo, descripcion):
@@ -142,7 +130,7 @@ def subir_youtube(video_path, titulo, descripcion):
         "snippet": {
             "title": titulo,
             "description": descripcion,
-            "tags": ["bolsa", "acciones", "inversion", "finanzas", "acciones baratas", "invertir"],
+            "tags": ["bolsa", "acciones", "inversion", "finanzas", "acciones baratas"],
             "categoryId": "22"
         },
         "status": {"privacyStatus": "public"}
@@ -169,7 +157,7 @@ def pipeline(job_id, tema, instrucciones_extra=""):
         audio = generar_voz(guion, job_id)
 
         JOBS[job_id]["status"] = "montando_video"
-        video_path = montar_video(imagenes, audio, guion, job_id)
+        video_path = montar_video_ffmpeg(imagenes, audio, job_id)
         JOBS[job_id]["video_path"] = video_path
         JOBS[job_id]["status"] = "listo"
 
@@ -177,9 +165,6 @@ def pipeline(job_id, tema, instrucciones_extra=""):
         JOBS[job_id]["status"] = "error"
         JOBS[job_id]["error"] = str(e)
 
-# ============================================================
-# RUTAS API
-# ============================================================
 @app.route("/api/generar", methods=["POST"])
 def api_generar():
     data = request.json
@@ -187,14 +172,11 @@ def api_generar():
     instrucciones = data.get("instrucciones", "")
     if not tema:
         return jsonify({"error": "Falta el tema"}), 400
-
     job_id = str(uuid.uuid4())[:8]
     JOBS[job_id] = {"status": "iniciando", "tema": tema}
-
     t = threading.Thread(target=pipeline, args=(job_id, tema, instrucciones))
     t.daemon = True
     t.start()
-
     return jsonify({"job_id": job_id})
 
 @app.route("/api/estado/<job_id>")
