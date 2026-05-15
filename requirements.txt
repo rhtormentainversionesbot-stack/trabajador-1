@@ -2,9 +2,6 @@ flask
 flask-cors
 google-generativeai
 elevenlabs
-moviepy==1.0.3
-imageio==2.28.1
-imageio-ffmpeg==0.4.9
 requests
 google-auth
 google-auth-oauthlib
