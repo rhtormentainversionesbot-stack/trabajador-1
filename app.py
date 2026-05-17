@@ -1,12 +1,12 @@
 """
-TRABAJADOR 1 — Backend Flask
-Usa Groq (gratis) + ElevenLabs para voz
+TRABAJADOR 1 — Backend Flask v2
+Jobs guardados en disco para sobrevivir al sleep de Render
 """
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from groq import Groq
-from elevenlabs.client import ElevenLabs
+from gtts import gTTS
 import requests
 import os
 import json
@@ -21,17 +21,38 @@ from google.oauth2.credentials import Credentials
 app = Flask(__name__)
 CORS(app)
 
-GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-PEXELS_API_KEY     = os.environ.get("PEXELS_API_KEY", "")
-YOUTUBE_TOKEN      = os.environ.get("YOUTUBE_TOKEN", "")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+YOUTUBE_TOKEN  = os.environ.get("YOUTUBE_TOKEN", "")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
-eleven = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-JOBS = {}
+SCOPES   = ["https://www.googleapis.com/auth/youtube.upload"]
+JOBS_DIR = "/tmp/jobs"
+os.makedirs(JOBS_DIR, exist_ok=True)
 
+# ============================================================
+# JOBS EN DISCO
+# ============================================================
+def save_job(job_id, data):
+    with open(JOBS_DIR + "/" + job_id + ".json", "w") as f:
+        json.dump(data, f)
+
+def load_job(job_id):
+    path = JOBS_DIR + "/" + job_id + ".json"
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+def update_job(job_id, updates):
+    job = load_job(job_id) or {}
+    job.update(updates)
+    save_job(job_id, job)
+
+# ============================================================
+# IA — GROQ
+# ============================================================
 def llamar_groq(prompt):
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -69,6 +90,9 @@ def generar_descripcion(tema, guion):
     )
     return llamar_groq(prompt) + "\n\nEsto no es asesoramiento financiero."
 
+# ============================================================
+# IMAGENES — PEXELS
+# ============================================================
 def obtener_imagenes(query, job_id, cantidad=5):
     headers = {"Authorization": PEXELS_API_KEY}
     url = "https://api.pexels.com/v1/search?query=" + query + " stock market finance&per_page=" + str(cantidad) + "&orientation=landscape"
@@ -85,13 +109,18 @@ def obtener_imagenes(query, job_id, cantidad=5):
         rutas.append(ruta)
     return rutas
 
+# ============================================================
+# VOZ — gTTS (gratis)
+# ============================================================
 def generar_voz(texto, job_id):
-    from gtts import gTTS
     ruta = "/tmp/" + job_id + "/audio.mp3"
     tts = gTTS(text=texto, lang="es", slow=False)
     tts.save(ruta)
     return ruta
 
+# ============================================================
+# VIDEO — ffmpeg
+# ============================================================
 def montar_video_ffmpeg(imagenes, audio_path, job_id):
     salida = "/tmp/" + job_id + "/video_final.mp4"
     lista_path = "/tmp/" + job_id + "/lista.txt"
@@ -122,6 +151,9 @@ def montar_video_ffmpeg(imagenes, audio_path, job_id):
 
     return salida
 
+# ============================================================
+# YOUTUBE
+# ============================================================
 def subir_youtube(video_path, titulo, descripcion):
     creds_data = json.loads(YOUTUBE_TOKEN)
     creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
@@ -140,31 +172,33 @@ def subir_youtube(video_path, titulo, descripcion):
     response = req.execute()
     return "https://youtube.com/watch?v=" + response["id"]
 
+# ============================================================
+# PIPELINE
+# ============================================================
 def pipeline(job_id, tema, instrucciones_extra=""):
     try:
-        JOBS[job_id]["status"] = "generando_guion"
+        update_job(job_id, {"status": "generando_guion"})
         guion = generar_guion(tema, instrucciones_extra)
         titulo = generar_titulo(tema)
         descripcion = generar_descripcion(tema, guion)
-        JOBS[job_id]["guion"] = guion
-        JOBS[job_id]["titulo"] = titulo
-        JOBS[job_id]["descripcion"] = descripcion
+        update_job(job_id, {"guion": guion, "titulo": titulo, "descripcion": descripcion})
 
-        JOBS[job_id]["status"] = "descargando_imagenes"
+        update_job(job_id, {"status": "descargando_imagenes"})
         imagenes = obtener_imagenes(tema, job_id)
 
-        JOBS[job_id]["status"] = "generando_voz"
+        update_job(job_id, {"status": "generando_voz"})
         audio = generar_voz(guion, job_id)
 
-        JOBS[job_id]["status"] = "montando_video"
+        update_job(job_id, {"status": "montando_video"})
         video_path = montar_video_ffmpeg(imagenes, audio, job_id)
-        JOBS[job_id]["video_path"] = video_path
-        JOBS[job_id]["status"] = "listo"
+        update_job(job_id, {"video_path": video_path, "status": "listo"})
 
     except Exception as e:
-        JOBS[job_id]["status"] = "error"
-        JOBS[job_id]["error"] = str(e)
+        update_job(job_id, {"status": "error", "error": str(e)})
 
+# ============================================================
+# RUTAS API
+# ============================================================
 @app.route("/api/generar", methods=["POST"])
 def api_generar():
     data = request.json
@@ -173,7 +207,7 @@ def api_generar():
     if not tema:
         return jsonify({"error": "Falta el tema"}), 400
     job_id = str(uuid.uuid4())[:8]
-    JOBS[job_id] = {"status": "iniciando", "tema": tema}
+    save_job(job_id, {"status": "iniciando", "tema": tema})
     t = threading.Thread(target=pipeline, args=(job_id, tema, instrucciones))
     t.daemon = True
     t.start()
@@ -181,40 +215,39 @@ def api_generar():
 
 @app.route("/api/estado/<job_id>")
 def api_estado(job_id):
-    job = JOBS.get(job_id)
+    job = load_job(job_id)
     if not job:
         return jsonify({"error": "Job no encontrado"}), 404
     return jsonify(job)
 
 @app.route("/api/video/<job_id>")
 def api_video(job_id):
-    job = JOBS.get(job_id)
+    job = load_job(job_id)
     if not job or job.get("status") != "listo":
         return jsonify({"error": "Video no listo"}), 404
     return send_file(job["video_path"], mimetype="video/mp4")
 
 @app.route("/api/subir/<job_id>", methods=["POST"])
 def api_subir(job_id):
-    job = JOBS.get(job_id)
+    job = load_job(job_id)
     if not job or job.get("status") != "listo":
         return jsonify({"error": "Video no listo"}), 404
     try:
         url = subir_youtube(job["video_path"], job["titulo"], job["descripcion"])
-        JOBS[job_id]["status"] = "subido"
-        JOBS[job_id]["youtube_url"] = url
+        update_job(job_id, {"status": "subido", "youtube_url": url})
         return jsonify({"url": url})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/regenerar/<job_id>", methods=["POST"])
 def api_regenerar(job_id):
-    job = JOBS.get(job_id)
+    job = load_job(job_id)
     if not job:
         return jsonify({"error": "Job no encontrado"}), 404
     data = request.json
     instrucciones = data.get("instrucciones", "")
     tema = job["tema"]
-    JOBS[job_id] = {"status": "iniciando", "tema": tema}
+    save_job(job_id, {"status": "iniciando", "tema": tema})
     t = threading.Thread(target=pipeline, args=(job_id, tema, instrucciones))
     t.daemon = True
     t.start()
