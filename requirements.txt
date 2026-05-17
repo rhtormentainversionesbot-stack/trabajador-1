@@ -1,9 +1,13 @@
 flask
 flask-cors
-google-generativeai
+groq
 elevenlabs
 requests
 google-auth
 google-auth-oauthlib
 google-api-python-client
 gunicorn
+ 
+
+
+
