@@ -1,13 +1,12 @@
 """
 TRABAJADOR 1 — Backend Flask
-Usa Groq (gratis) para generar guiones
+Usa Groq (gratis) + ElevenLabs para voz
 """
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from groq import Groq
 from elevenlabs.client import ElevenLabs
-from elevenlabs import save
 import requests
 import os
 import json
@@ -88,12 +87,14 @@ def obtener_imagenes(query, job_id, cantidad=5):
 
 def generar_voz(texto, job_id):
     ruta = "/tmp/" + job_id + "/audio.mp3"
-    audio = eleven.generate(
+    audio = eleven.text_to_speech.convert(
         text=texto,
-        voice="Rachel",
-        model="eleven_multilingual_v2"
+        voice_id="21m00Tcm4TlvDq8ikWAM",
+        model_id="eleven_multilingual_v2"
     )
-    save(audio, ruta)
+    with open(ruta, "wb") as f:
+        for chunk in audio:
+            f.write(chunk)
     return ruta
 
 def montar_video_ffmpeg(imagenes, audio_path, job_id):
