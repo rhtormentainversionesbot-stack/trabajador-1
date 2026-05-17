@@ -139,13 +139,13 @@ def montar_video_ffmpeg(imagenes, audio_path, job_id):
             f.write("duration " + str(round(duracion_img, 2)) + "\n")
         f.write("file '" + imagenes[-1] + "'\n")
 
-    subprocess.run([
+   subprocess.run([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", lista_path,
         "-i", audio_path,
-        "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
         "-c:v", "libx264", "-c:a", "aac",
         "-shortest", "-pix_fmt", "yuv420p",
+        "-preset", "ultrafast",
         salida
     ], check=True)
 
