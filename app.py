@@ -89,7 +89,7 @@ def generar_voz(texto, job_id):
     ruta = "/tmp/" + job_id + "/audio.mp3"
     audio = eleven.text_to_speech.convert(
         text=texto,
-        voice_id="21m00Tcm4TlvDq8ikWAM",
+       voice_id="t9LRTh3y1ioN00e9wsNh",
         model_id="eleven_multilingual_v2"
     )
     with open(ruta, "wb") as f:
