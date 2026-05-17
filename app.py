@@ -86,15 +86,10 @@ def obtener_imagenes(query, job_id, cantidad=5):
     return rutas
 
 def generar_voz(texto, job_id):
+    from gtts import gTTS
     ruta = "/tmp/" + job_id + "/audio.mp3"
-    audio = eleven.text_to_speech.convert(
-        text=texto,
-       voice_id="t9LRTh3y1ioN00e9wsNh",
-        model_id="eleven_multilingual_v2"
-    )
-    with open(ruta, "wb") as f:
-        for chunk in audio:
-            f.write(chunk)
+    tts = gTTS(text=texto, lang="es", slow=False)
+    tts.save(ruta)
     return ruta
 
 def montar_video_ffmpeg(imagenes, audio_path, job_id):
