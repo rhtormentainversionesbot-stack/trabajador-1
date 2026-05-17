@@ -1,11 +1,11 @@
 """
 TRABAJADOR 1 — Backend Flask
-Sin moviepy, usa ffmpeg directamente para compatibilidad con Python 3.14
+Usa Groq (gratis) para generar guiones
 """
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import google.generativeai as genai
+from groq import Groq
 from elevenlabs.client import ElevenLabs
 from elevenlabs import save
 import requests
@@ -22,17 +22,24 @@ from google.oauth2.credentials import Credentials
 app = Flask(__name__)
 CORS(app)
 
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 PEXELS_API_KEY     = os.environ.get("PEXELS_API_KEY", "")
 YOUTUBE_TOKEN      = os.environ.get("YOUTUBE_TOKEN", "")
 
-genai.configure(api_key=GEMINI_API_KEY)
-gemini = genai.GenerativeModel("gemini-2.0-flash")
+groq_client = Groq(api_key=GROQ_API_KEY)
 eleven = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 JOBS = {}
+
+def llamar_groq(prompt):
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=500
+    )
+    return response.choices[0].message.content.strip()
 
 def generar_guion(tema, instrucciones_extra=""):
     prompt = (
@@ -46,16 +53,14 @@ def generar_guion(tema, instrucciones_extra=""):
         "Incluye al final: Esto no es asesoramiento financiero. "
         "Solo el texto para narrar, sin acotaciones ni titulos."
     )
-    r = gemini.generate_content(prompt)
-    return r.text.strip()
+    return llamar_groq(prompt)
 
 def generar_titulo(tema):
     prompt = (
         "Crea un titulo viral para YouTube sobre: " + tema + ". "
         "Maximo 60 caracteres. Sin emojis. En espanol. Solo el titulo, nada mas."
     )
-    r = gemini.generate_content(prompt)
-    return r.text.strip()
+    return llamar_groq(prompt)
 
 def generar_descripcion(tema, guion):
     prompt = (
@@ -63,8 +68,7 @@ def generar_descripcion(tema, guion):
         "Basate en este guion: " + guion[:300] + ". "
         "Maximo 200 palabras. Incluye hashtags relevantes de bolsa. En espanol."
     )
-    r = gemini.generate_content(prompt)
-    return r.text.strip() + "\n\nEsto no es asesoramiento financiero."
+    return llamar_groq(prompt) + "\n\nEsto no es asesoramiento financiero."
 
 def obtener_imagenes(query, job_id, cantidad=5):
     headers = {"Authorization": PEXELS_API_KEY}
